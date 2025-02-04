@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Threading.Tasks;
 using DotNetCore.CAP;
 
 namespace Sample.ConsoleApp
@@ -6,9 +7,10 @@ namespace Sample.ConsoleApp
     public class EventSubscriber : ICapSubscribe
     {
         [CapSubscribe("sample.console.showtime")]
-        public void ShowTime(DateTime date)
+        public async Task ShowTime(DateTime date)
         {
             Console.WriteLine(date);
+            await Task.CompletedTask;
         }
     }
 }

@@ -10,66 +10,56 @@ using DotNetCore.CAP.Transport;
 using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
 
-namespace DotNetCore.CAP.RabbitMQ
+namespace DotNetCore.CAP.RabbitMQ;
+
+internal sealed class RabbitMqTransport : ITransport
 {
-    internal sealed class RabbitMQTransport : ITransport
+    private readonly IConnectionChannelPool _connectionChannelPool;
+    private readonly string _exchange;
+    private readonly ILogger _logger;
+
+    public RabbitMqTransport(ILogger<RabbitMqTransport> logger, IConnectionChannelPool connectionChannelPool)
     {
-        private readonly IConnectionChannelPool _connectionChannelPool;
-        private readonly ILogger _logger;
-        private readonly string _exchange;
+        _logger = logger;
+        _connectionChannelPool = connectionChannelPool;
+        _exchange = _connectionChannelPool.Exchange;
+    }
 
-        public RabbitMQTransport(
-            ILogger<RabbitMQTransport> logger,
-            IConnectionChannelPool connectionChannelPool)
+    public BrokerAddress BrokerAddress => new("RabbitMQ", _connectionChannelPool.HostAddress);
+
+    public async Task<OperateResult> SendAsync(TransportMessage message)
+    {
+        IChannel? channel = null;
+        try
         {
-            _logger = logger;
-            _connectionChannelPool = connectionChannelPool;
-            _exchange = _connectionChannelPool.Exchange;
+            channel = await _connectionChannelPool.Rent();
+
+            var props = new BasicProperties
+            {
+                DeliveryMode = DeliveryModes.Persistent,
+                Headers = message.Headers.ToDictionary(x => x.Key, object? (x) => x.Value)
+            };
+
+            await channel.BasicPublishAsync(_exchange, message.GetName(), false, props, message.Body);
+
+            _logger.LogInformation("CAP message '{0}' published, internal id '{1}'", message.GetName(), message.GetId());
+
+            return OperateResult.Success;
         }
-
-        public BrokerAddress BrokerAddress => new("RabbitMQ", _connectionChannelPool.HostAddress);
-
-        public Task<OperateResult> SendAsync(TransportMessage message)
+        catch (Exception ex)
         {
-            IModel? channel = null;
-            try
+            var wrapperEx = new PublisherSentFailedException(ex.Message, ex);
+            var errors = new OperateError
             {
-                channel = _connectionChannelPool.Rent();
+                Code = ex.HResult.ToString(),
+                Description = ex.Message
+            };
 
-                var props = channel.CreateBasicProperties();
-                props.DeliveryMode = 2;
-                props.Headers = message.Headers.ToDictionary(x => x.Key, x => (object?)x.Value);
-
-                channel.BasicPublish(_exchange, message.GetName(), props, message.Body);
-
-                // Enable publish confirms
-                if (channel.NextPublishSeqNo > 0)
-                {
-                    channel.WaitForConfirmsOrDie(TimeSpan.FromSeconds(5));
-                }
-
-                _logger.LogInformation("CAP message '{0}' published, internal id '{1}'", message.GetName(), message.GetId());
-
-                return Task.FromResult(OperateResult.Success);
-            }
-            catch (Exception ex)
-            {
-                var wrapperEx = new PublisherSentFailedException(ex.Message, ex);
-                var errors = new OperateError
-                {
-                    Code = ex.HResult.ToString(),
-                    Description = ex.Message
-                };
-
-                return Task.FromResult(OperateResult.Failed(wrapperEx, errors));
-            }
-            finally
-            {
-                if (channel != null)
-                {
-                    _connectionChannelPool.Return(channel);
-                }
-            }
+            return OperateResult.Failed(wrapperEx, errors);
+        }
+        finally
+        {
+            if (channel != null) _connectionChannelPool.Return(channel);
         }
     }
 }

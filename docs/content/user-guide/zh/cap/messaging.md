@@ -6,6 +6,9 @@
 
 你可以阅读 [quick-start](../getting-started/quick-start.md#_3) 来学习如何发送和处理消息。
 
+!!! WARNING "消费者中使用 HTTPClient 引发的 TimeoutException"
+    默认情况下，如果消费者抛出 `OperationCanceledException`（包括 `TaskCanceledException`），我们会认为这是用户的正常行为而对异常进行忽略。如果你在消费者方法中使用 HTTPClient 并且进行了配置了Timeout配置，由于HTTP Client的[设计问题](https://github.com/dotnet/runtime/issues/21965)，你可能需要单独对异常进行处理并重新引发非OperationCanceledException，参考 #1368
+
 ## 补偿事务
 
 [Compensating transaction](https://en.wikipedia.org/wiki/Compensating_transaction)
@@ -49,6 +52,35 @@ public object DeductProductQty(JsonElement param)
     var qty = param.GetProperty("Qty").GetInt32();
 
     //business logic 
+
+    return new { OrderId = orderId, IsSuccess = true };
+}
+```
+
+### 控制回调响应
+
+你可以通过 `[FromCap]` 标记在订阅方法中注入 `CapHeader` 参数，并利用其提供的方法来向回调上下文中添加额外的头信息或者终止回调。
+
+示例如下：
+
+```cs
+[CapSubscribe("place.order.qty.deducted")]
+public object DeductProductQty(JsonElement param, [FromCap] CapHeader header)
+{
+    var orderId = param.GetProperty("OrderId").GetInt32();
+    var productId = param.GetProperty("ProductId").GetInt32();
+    var qty = param.GetProperty("Qty").GetInt32();
+
+    // 添加额外的头信息到响应消息中
+    header.AddResponseHeader("some-message-info", "this is the test");
+    // 或再次添加回调的回调
+    header.AddResponseHeader(DotNetCore.CAP.Messages.Headers.CallbackName, "place.order.qty.deducted-callback");
+
+    // 如果你不再遵从发送着指定的回调，想修改回调，可通过 RewriteCallback 方法修改。
+    header.RewriteCallback("new-callback-name");
+
+    // 如果你想终止/停止，或不再给发送方响应，调用 RemoveCallback 来移除回调。
+    header.RemoveCallback();
 
     return new { OrderId = orderId, IsSuccess = true };
 }
@@ -113,7 +145,7 @@ CAP 接收到消息之后会将消息进行 Persistent（持久化）， 有关 
 
 在消息发送过程中，当出现 Broker 宕机或者连接失败的情况亦或者出现异常的情况下，这个时候 CAP 会对发送的重试，第一次重试次数为 3，4分钟后以后每分钟重试一次，进行次数 +1，当总次数达到50次后，CAP将不对其进行重试。
 
-你可以在 CapOptions 中设置 [FailedRetryCount](../configuration#failedretrycount) 来调整默认重试的总次数。
+你可以在 CapOptions 中设置 [FailedRetryCount](configuration.md#failedretrycount) 来调整默认重试的总次数，或使用 [FailedThresholdCallback](configuration.md#FailedThresholdCallback) 在达到最大重试次数时收到通知。
 
 当失败总次数达到默认失败总次数后，就不会进行重试了，你可以在 Dashboard 中查看消息失败的原因，然后进行人工重试处理。
 
@@ -121,9 +153,11 @@ CAP 接收到消息之后会将消息进行 Persistent（持久化）， 有关 
 
 当 Consumer 接收到消息时，会执行消费者方法，在执行消费者方法出现异常时，会进行重试。这个重试策略和上面的 发送重试 是相同的。
 
+无论发送失败或者消费失败，我们会将异常消息同时存储到消息 header 中的 cap-exception 字段中，你可以在数据库表的 Content 字段的json中找到。
+
 ## 消息数据清理
 
-数据库消息表中具有一个 ExpiresAt 字段表示消息的过期时间，当消息发送成功或者消费成功后，CAP会将消息状态为 Successed 的 ExpiresAt 设置为 1天 后过期，会将消息状态为 Failed 的 ExpiresAt 设置为 15天 后过期（可通过 [FailedMessageExpiredAfter](../configuration#failedmessageexpiredafter) 配置)。
+数据库消息表中具有一个 ExpiresAt 字段表示消息的过期时间，当消息发送成功或者消费成功后，CAP 会将消息状态为 Successed 的 ExpiresAt 设置为 1天 后过期，会将消息状态为 Failed 的 ExpiresAt 设置为 15天 后过期（可通过 [FailedMessageExpiredAfter](configuration.md#failedmessageexpiredafter) 配置)。
 
-CAP 默认情况下会每隔**5分钟**将消息表的数据进行清理删除，避免数据量过多导致性能的降低。清理规则为 ExpiresAt 不为空并且小于当前时间的数据。 也就是说状态为Failed的消息（正常情况他们已经被重试了 50 次），如果你15天没有人工介入处理，同样会被清理掉。你可以通过 [CollectorCleaningInterval](../configuration#collectorcleaninginterval) 配置项来自定义间隔时间。
+CAP 默认情况下会每隔**5分钟**将消息表的数据进行清理删除，避免数据量过多导致性能的降低。清理规则为 ExpiresAt 不为空并且小于当前时间的数据。 也就是说状态为Failed的消息（正常情况他们已经被重试了 50 次），如果你15天没有人工介入处理，同样会被清理掉。你可以通过 [CollectorCleaningInterval](configuration.md#collectorcleaninginterval) 配置项来自定义间隔时间。
 

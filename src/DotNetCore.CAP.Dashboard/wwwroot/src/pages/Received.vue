@@ -14,7 +14,7 @@
         <h2 class="page-line mb-2">{{ $t("Received Message") }}</h2>
         <b-form class="d-flex">
           <div class="col-sm-10">
-            <div class="row mb-2">
+            <div class="form-row mb-2">
               <label class="sr-only" for="inline-form-input-name">{{ $t("Name") }}</label>
               <b-form-input v-model="formData.name" id="inline-form-input-name" class="form-control col mr-4"
                 :placeholder="$t('Name')" />
@@ -23,7 +23,7 @@
               <b-form-input v-model="formData.group" id="inline-form-input-group" class="form-control col"
                 :placeholder="$t('Group')" />
             </div>
-            <div class="row">
+            <div class="form-row">
               <label class="sr-only" for="inline-form-input-content">{{ $t("Content") }}</label>
               <b-form-input v-model="formData.content" id="inline-form-input-content" class="form-control"
                 :placeholder="$t('Content')" />
@@ -52,7 +52,7 @@
             </b-button-group>
           </div>
         </b-btn-toolbar>
-        <b-table id="datatable" class="mt-3" :busy="isBusy" striped thead-tr-class="text-left"
+        <b-table id="datatable" class="mt-3" :busy="isBusy" striped thead-tr-class="text-left" head-variant="light"
           tbody-tr-class="text-left" small :fields="fields" :items="items" select-mode="range">
           <template #table-busy>
             <div class="text-center text-secondary my-2">
@@ -246,12 +246,16 @@ export default {
     reexecute: function () {
       const _this = this;
       axios.post('/received/reexecute', this.selectedItems.map((item) => item.id)).then(() => {
-        _this.clear();
-        _this.$bvToast.toast(this.$t("ReexecuteSuccess"), {
-          title: "Tips",
-          autoHideDelay: 500,
-          appendToast: false,
+        this.selectedItems.map((item) => {
+          _this.$bvToast.toast(this.$t("ReexecuteSuccess") + "   " + item.id, {
+            title: "Tips",
+            variant: "secondary",
+            autoHideDelay: 1000,
+            appendToast: true,
+            solid: true
+          });
         });
+        _this.clear();
       });
     },
     clear() {

@@ -40,10 +40,34 @@ CAP 直接对外提供的 Kafka 配置参数如下：
 NAME | DESCRIPTION | TYPE | DEFAULT
 :---|:---|---|:---
 Servers | Broker 地址 | string | 
+MainConfig | librdkafka 的配置参数 | Dictionary<string, string> | 见下
 ConnectionPoolSize | 用户名 | int | 10
-CustomHeaders | 设置自定义头 | Function | 
+CustomHeadersBuilder | 设置自定义头 | Function | 见下
+RetriableErrorCodes |  ConsumeException 异常时的重试错误码集合  | IList<ErrorCode> |  见代码
+TopicOptions | 配置 NumPartitions 和 ReplicationFactor | KafkaTopicOptions |  -1
 
-有关 `CustomHeaders` 的说明：
+#### Kafka MainConfig Options
+
+如果你需要 **更多** 原生 Kakfa 相关的配置项，可以通过 `MainConfig` 配置项进行设定：
+
+```csharp
+services.AddCap(capOptions => 
+{
+    capOptions.UseKafka(kafkaOption=>
+    {
+        // kafka options.
+        // kafkaOptions.MainConfig.Add("", "");
+    });
+});
+```
+
+MainConfig 为配置字典，你可以通过以下链接找到其支持的配置项列表。
+
+[https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md](https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md)
+
+#### CustomHeadersBuilder Options
+
+有关 `CustomHeadersBuilder` 的说明：
 
 如果你想在消费消息的时候，通过从 `CapHeader` 获取 Kafka 中例如 Offset 或者 Partition 等信息，你可以通过自定义此函数来实现这一点。
 
@@ -54,7 +78,7 @@ x.UseKafka(opt =>
 {
     //...
 
-    opt.CustomHeaders = kafkaResult => new List<KeyValuePair<string, string>>
+    opt.CustomHeadersBuilder = (kafkaResult,sp) => new List<KeyValuePair<string, string>>
     {
         new KeyValuePair<string, string>("my.kafka.offset", kafkaResult.Offset.ToString()),
         new KeyValuePair<string, string>("my.kafka.partition", kafkaResult.Partition.ToString())
@@ -72,23 +96,3 @@ public void HeadersTest(DateTime value, [FromCap]CapHeader header)
     var partition = header["my.kafka.partition"];
 }
 ```
-
-#### Kafka MainConfig Options
-
-如果你需要 **更多** 原生 Kakfa 相关的配置项，可以通过 `MainConfig` 配置项进行设定：
-
-
-```csharp
-services.AddCap(capOptions => 
-{
-    capOptions.UseKafka(kafkaOption=>
-    {
-        // kafka options.
-        // kafkaOptions.MainConfig.Add("", "");
-    });
-});
-```
-
-MainConfig 为配置字典，你可以通过以下链接找到其支持的配置项列表。
-
-[https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md](https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md)

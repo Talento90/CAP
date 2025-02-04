@@ -18,73 +18,64 @@ namespace DotNetCore.CAP.Processor;
 
 public class Dispatcher : IDispatcher
 {
-    private CancellationTokenSource? _tasksCts;
-    private readonly CancellationTokenSource _delayCts = new();
     private readonly ISubscribeExecutor _executor;
     private readonly ILogger<Dispatcher> _logger;
     private readonly CapOptions _options;
     private readonly IMessageSender _sender;
     private readonly IDataStorage _storage;
-    private readonly PriorityQueue<MediumMessage, long> _schedulerQueue;
-    private readonly bool _enablePrefetch;
+    private readonly ScheduledMediumMessageQueue _schedulerQueue = new();
+    private readonly bool _enableParallelExecute;
+    private readonly bool _enableParallelSend;
+    private readonly int _pChannelSize;
 
+    private CancellationTokenSource? _tasksCts;
     private Channel<MediumMessage> _publishedChannel = default!;
     private Channel<(MediumMessage, ConsumerExecutorDescriptor?)> _receivedChannel = default!;
-    private long _nextSendTime = DateTime.MaxValue.Ticks;
 
-    public Dispatcher(ILogger<Dispatcher> logger,
-        IMessageSender sender,
-        IOptions<CapOptions> options,
-        ISubscribeExecutor executor,
-        IDataStorage storage)
+    public Dispatcher(ILogger<Dispatcher> logger, IMessageSender sender, IOptions<CapOptions> options,
+        ISubscribeExecutor executor, IDataStorage storage)
     {
         _logger = logger;
         _sender = sender;
         _options = options.Value;
         _executor = executor;
-        _schedulerQueue = new PriorityQueue<MediumMessage, long>();
         _storage = storage;
-        _enablePrefetch = options.Value.EnableConsumerPrefetch;
+        _enableParallelExecute = options.Value.EnableSubscriberParallelExecute;
+        _enableParallelSend = options.Value.EnablePublishParallelSend;
+        _pChannelSize = Environment.ProcessorCount * 500;
     }
 
     public async Task Start(CancellationToken stoppingToken)
     {
         stoppingToken.ThrowIfCancellationRequested();
         _tasksCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, CancellationToken.None);
-        _tasksCts.Token.Register(() => _delayCts.Cancel());
 
-        var capacity = _options.ProducerThreadCount * 500;
-        _publishedChannel = Channel.CreateBounded<MediumMessage>(
-            new BoundedChannelOptions(capacity > 5000 ? 5000 : capacity)
-            {
-                AllowSynchronousContinuations = true,
-                SingleReader = _options.ProducerThreadCount == 1,
-                SingleWriter = true,
-                FullMode = BoundedChannelFullMode.Wait
-            });
-
-        await Task.WhenAll(Enumerable.Range(0, _options.ProducerThreadCount)
-            .Select(_ => Task.Factory.StartNew(Sending, _tasksCts.Token,
-                TaskCreationOptions.LongRunning, TaskScheduler.Default)).ToArray()).ConfigureAwait(false);
-
-        if (_enablePrefetch)
+        _publishedChannel = Channel.CreateBounded<MediumMessage>(new BoundedChannelOptions(_pChannelSize)
         {
-            capacity = _options.ConsumerThreadCount * 300;
+            AllowSynchronousContinuations = true,
+            SingleReader = true,
+            SingleWriter = true,
+            FullMode = BoundedChannelFullMode.Wait
+        });
+
+        await Task.Run(Sending, _tasksCts.Token).ConfigureAwait(false); //here return valuetask
+
+        if (_enableParallelExecute)
+        {
             _receivedChannel = Channel.CreateBounded<(MediumMessage, ConsumerExecutorDescriptor?)>(
-                new BoundedChannelOptions(capacity > 3000 ? 3000 : capacity)
+                new BoundedChannelOptions(_options.SubscriberParallelExecuteThreadCount * _options.SubscriberParallelExecuteBufferFactor)
                 {
                     AllowSynchronousContinuations = true,
-                    SingleReader = _options.ConsumerThreadCount == 1,
+                    SingleReader = _options.SubscriberParallelExecuteThreadCount == 1,
                     SingleWriter = true,
                     FullMode = BoundedChannelFullMode.Wait
                 });
 
-            await Task.WhenAll(Enumerable.Range(0, _options.ConsumerThreadCount)
-                .Select(_ => Task.Factory.StartNew(Processing, _tasksCts.Token,
-                    TaskCreationOptions.LongRunning, TaskScheduler.Default)).ToArray()).ConfigureAwait(false);
+            await Task.WhenAll(Enumerable.Range(0, _options.SubscriberParallelExecuteThreadCount)
+                .Select(_ => Task.Run(Processing, _tasksCts.Token)).ToArray())
+                .ConfigureAwait(false);
         }
-
-        _ = Task.Factory.StartNew(async () =>
+        _ = Task.Run(async () =>
         {
             //When canceling, place the message status of unsent in the queue to delayed
             _tasksCts.Token.Register(() =>
@@ -93,7 +84,7 @@ public class Dispatcher : IDispatcher
                 {
                     if (_schedulerQueue.Count == 0) return;
 
-                    var messageIds = _schedulerQueue.UnorderedItems.Select(x => x.Element.DbId).ToArray();
+                    var messageIds = _schedulerQueue.UnorderedItems.Select(x => x.DbId).ToArray();
                     _storage.ChangePublishStateToDelayedAsync(messageIds).GetAwaiter().GetResult();
                     _logger.LogDebug("Update storage to delayed success of delayed message in memory queue!");
                 }
@@ -107,31 +98,32 @@ public class Dispatcher : IDispatcher
             {
                 try
                 {
-                    while (_schedulerQueue.TryPeek(out _, out _nextSendTime))
+                    await foreach (var nextMessage in _schedulerQueue.GetConsumingEnumerable(_tasksCts.Token))
                     {
-                        var delayTime = _nextSendTime - DateTime.Now.Ticks;
-
-                        if (delayTime > 500000) //50ms
-                        {
-                            await Task.Delay(new TimeSpan(delayTime), _delayCts.Token);
-                        }
                         _tasksCts.Token.ThrowIfCancellationRequested();
-
-                        await _sender.SendAsync(_schedulerQueue.Dequeue()).ConfigureAwait(false);
+                        await _sender.SendAsync(nextMessage).ConfigureAwait(false);
                     }
+
                     _tasksCts.Token.WaitHandle.WaitOne(100);
                 }
                 catch (OperationCanceledException)
                 {
                     //Ignore
                 }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, 
+                        "Scheduled message publishing failed unexpectedly, which will stop future scheduled " +
+                        "messages from publishing. See more details here: https://github.com/dotnetcore/CAP/issues/1637. " +
+                        "Exception: {Message}", 
+                        ex.Message);
+                    throw;
+                }
             }
-        }, _tasksCts.Token, TaskCreationOptions.LongRunning, TaskScheduler.Default).ConfigureAwait(false);
-
-        _logger.LogInformation("Starting default Dispatcher");
+        }, _tasksCts.Token).ConfigureAwait(false);
     }
 
-    public async ValueTask EnqueueToScheduler(MediumMessage message, DateTime publishTime, object? transaction = null)
+    public async Task EnqueueToScheduler(MediumMessage message, DateTime publishTime, object? transaction = null)
     {
         message.ExpiresAt = publishTime;
 
@@ -142,11 +134,6 @@ public class Dispatcher : IDispatcher
             await _storage.ChangePublishStateAsync(message, StatusName.Queued, transaction);
 
             _schedulerQueue.Enqueue(message, publishTime.Ticks);
-
-            if (publishTime.Ticks < _nextSendTime)
-            {
-                _delayCts.Cancel();
-            }
         }
         else
         {
@@ -158,10 +145,21 @@ public class Dispatcher : IDispatcher
     {
         try
         {
-            if (!_publishedChannel.Writer.TryWrite(message))
-                while (await _publishedChannel.Writer.WaitToWriteAsync(_tasksCts!.Token).ConfigureAwait(false))
-                    if (_publishedChannel.Writer.TryWrite(message))
-                        return;
+            if (_tasksCts!.IsCancellationRequested) return;
+
+            if (_enableParallelSend && message.Retries == 0)
+            {
+                if (!_publishedChannel.Writer.TryWrite(message))
+                    while (await _publishedChannel.Writer.WaitToWriteAsync(_tasksCts!.Token).ConfigureAwait(false))
+                        if (_publishedChannel.Writer.TryWrite(message))
+                            return;
+            }
+            else
+            {
+                var result = await _sender.SendAsync(message).ConfigureAwait(false);
+                if (!result.Succeeded) _logger.MessagePublishException(message.Origin.GetId(), result.ToString(), result.Exception);
+
+            }
         }
         catch (OperationCanceledException)
         {
@@ -173,7 +171,9 @@ public class Dispatcher : IDispatcher
     {
         try
         {
-            if (_enablePrefetch)
+            if (_tasksCts!.IsCancellationRequested) return;
+
+            if (_enableParallelExecute && message.Retries == 0)
             {
                 if (!_receivedChannel.Writer.TryWrite((message, descriptor)))
                 {
@@ -193,13 +193,14 @@ public class Dispatcher : IDispatcher
         }
         catch (Exception e)
         {
-            _logger.LogError(e, $"An exception occurred when invoke subscriber. MessageId:{message.DbId}");
+            _logger.LogError(e, "An exception occurred when invoke subscriber. MessageId:{MessageId}", message.DbId);
         }
     }
 
     public void Dispose()
     {
         _tasksCts?.Dispose();
+        GC.SuppressFinalize(this);
     }
 
     private async ValueTask Sending()
@@ -207,18 +208,45 @@ public class Dispatcher : IDispatcher
         try
         {
             while (await _publishedChannel.Reader.WaitToReadAsync(_tasksCts!.Token).ConfigureAwait(false))
-                while (_publishedChannel.Reader.TryRead(out var message))
-                    try
+            {
+                if (_enableParallelSend)
+                {
+                    var tasks = new List<Task>();
+                    var batchSize = _pChannelSize / 50;
+                    for (var i = 0; i < batchSize && _publishedChannel.Reader.TryRead(out var message); i++)
                     {
-                        var result = await _sender.SendAsync(message).ConfigureAwait(false);
-                        if (!result.Succeeded)
-                            _logger.MessagePublishException(message.Origin.GetId(), result.ToString(), result.Exception);
+                        var item = message;
+                        tasks.Add(Task.Run(async () =>
+                        {
+                            try
+                            {
+                                var result = await _sender.SendAsync(item).ConfigureAwait(false);
+                                if (!result.Succeeded) _logger.MessagePublishException(item.Origin.GetId(), result.ToString(), result.Exception);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogError(ex, $"An exception occurred when sending a message to the transport. Id:{message.DbId}");
+                            }
+                        }));
                     }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex,
-                            $"An exception occurred when sending a message to the MQ. Id:{message.DbId}");
-                    }
+
+                    await Task.WhenAll(tasks);
+                }
+                else
+                {
+                    while (_publishedChannel.Reader.TryRead(out var message))
+                        try
+                        {
+                            var result = await _sender.SendAsync(message).ConfigureAwait(false);
+                            if (!result.Succeeded) _logger.MessagePublishException(message.Origin.GetId(), result.ToString(), result.Exception);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, $"An exception occurred when sending a message to the transport. Id:{message.DbId}");
+                        }
+                }
+            }
+
         }
         catch (OperationCanceledException)
         {
@@ -234,7 +262,9 @@ public class Dispatcher : IDispatcher
                 while (_receivedChannel.Reader.TryRead(out var message))
                     try
                     {
-                        await _executor.ExecuteAsync(message.Item1, message.Item2, _tasksCts.Token).ConfigureAwait(false);
+                        var item1 = message.Item1;
+                        var item2 = message.Item2;
+                        await _executor.ExecuteAsync(item1, item2, _tasksCts.Token).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException)
                     {
@@ -243,7 +273,7 @@ public class Dispatcher : IDispatcher
                     catch (Exception e)
                     {
                         _logger.LogError(e,
-                            $"An exception occurred when invoke subscriber. MessageId:{message.Item1.DbId}");
+                             $"An exception occurred when invoke subscriber. MessageId:{message.Item1.DbId}");
                     }
         }
         catch (OperationCanceledException)

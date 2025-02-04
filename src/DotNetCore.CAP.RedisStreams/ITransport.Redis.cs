@@ -9,41 +9,33 @@ using DotNetCore.CAP.Transport;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
-namespace DotNetCore.CAP.RedisStreams
+namespace DotNetCore.CAP.RedisStreams;
+
+internal class RedisTransport(
+    IRedisStreamManager _redis,
+    IOptions<CapRedisOptions> options,
+    ILogger<RedisTransport> _logger) : ITransport
 {
-    internal class RedisTransport : ITransport
+    private readonly CapRedisOptions _options = options.Value;
+
+    public BrokerAddress BrokerAddress => new("redis", _options.Endpoint);
+
+    public async Task<OperateResult> SendAsync(TransportMessage message)
     {
-        private readonly ILogger<RedisTransport> _logger;
-        private readonly CapRedisOptions _options;
-        private readonly IRedisStreamManager _redis;
-
-        public RedisTransport(IRedisStreamManager redis, IOptions<CapRedisOptions> options,
-            ILogger<RedisTransport> logger)
+        try
         {
-            _redis = redis;
-            _options = options.Value;
-            _logger = logger;
+            await _redis.PublishAsync(message.GetName(), message.AsStreamEntries())
+                .ConfigureAwait(false);
+
+            _logger.LogDebug("Redis message [{message}] has been published.",message.GetName());
+
+            return OperateResult.Success;
         }
-
-        public BrokerAddress BrokerAddress => new ("redis", _options.Endpoint);
-
-        public async Task<OperateResult> SendAsync(TransportMessage message)
+        catch (Exception ex)
         {
-            try
-            {
-                await _redis.PublishAsync(message.GetName(), message.AsStreamEntries())
-                    .ConfigureAwait(false);
+            var wrapperEx = new PublisherSentFailedException(ex.Message, ex);
 
-                _logger.LogDebug($"Redis message [{message.GetName()}] has been published.");
-
-                return OperateResult.Success;
-            }
-            catch (Exception ex)
-            {
-                var wrapperEx = new PublisherSentFailedException(ex.Message, ex);
-
-                return OperateResult.Failed(wrapperEx);
-            }
+            return OperateResult.Failed(wrapperEx);
         }
     }
 }

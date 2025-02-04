@@ -39,43 +39,11 @@ The Kafka configuration parameters provided directly by the CAP:
 NAME | DESCRIPTION | TYPE | DEFAULT
 :---|:---|---|:---
 Servers | Broker server address | string | 
+MainConfig | librdkafka configuration parameters | Dictionary<string, string> | See below
 ConnectionPoolSize | connection pool size | int | 10
-CustomHeaders | Custom subscribe headers |  Func<> |  N/A
-
-#### CustomHeaders Options
-
-When the message sent from a heterogeneous system, because of the CAP needs to define additional headers, so an exception will occur at this time. By providing this parameter to set the custom headersn to make the subscriber works.
-
-You can find the description of heterogeneous system integration [here](../../cap/messaging#heterogeneous-system-integration).
-
-Sometimes, if you want to get additional context information from Broker, you can also add it through this option. For example, add information such as Offset or Partition.
-
-Example：
-
-```C#
-x.UseKafka(opt =>
-{
-    //...
-
-    opt.CustomHeaders = kafkaResult => new List<KeyValuePair<string, string>>
-    {
-        new KeyValuePair<string, string>("my.kafka.offset", kafkaResult.Offset.ToString()),
-        new KeyValuePair<string, string>("my.kafka.partition", kafkaResult.Partition.ToString())
-    };
-});
-```
-
-Then you can get the header you added by this way:
-
-```C#
-[CapSubscribe("sample.kafka.postgrsql")]
-public void HeadersTest(DateTime value, [FromCap]CapHeader header)
-{
-    var offset = header["my.kafka.offset"];
-    var partition = header["my.kafka.partition"];
-}
-```
-
+CustomHeadersBuilder | Custom subscribe headers |  Func<> |  N/A
+RetriableErrorCodes | Retriable error codes when ConsumeException  | IList<ErrorCode> |  See code
+TopicOptions | The configuraiton of NumPartitions and ReplicationFactor | KafkaTopicOptions |  -1
 
 #### Kafka MainConfig Options
 
@@ -95,3 +63,38 @@ services.AddCap(capOptions =>
 `MainConfig` is a configuration dictionary, you can find a list of supported configuration options through the following link.
 
 [https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md](https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md)
+
+#### CustomHeadersBuilder Options
+
+When the message sent from a heterogeneous system, because of the CAP needs to define additional headers, so an exception will occur at this time. By providing this parameter to set the custom headersn to make the subscriber works.
+
+You can find the description of heterogeneous system integration [here](../cap/messaging.md#heterogeneous-system-integration).
+
+Sometimes, if you want to get additional context information from Broker, you can also add it through this option. For example, add information such as Offset or Partition.
+
+Example：
+
+```C#
+x.UseKafka(opt =>
+{
+    //...
+
+    opt.CustomHeadersBuilder = (kafkaResult,sp) => new List<KeyValuePair<string, string>>
+    {
+        new KeyValuePair<string, string>("my.kafka.offset", kafkaResult.Offset.ToString()),
+        new KeyValuePair<string, string>("my.kafka.partition", kafkaResult.Partition.ToString())
+    };
+});
+```
+
+Then you can get the header you added by this way:
+
+```C#
+[CapSubscribe("sample.kafka.postgrsql")]
+public void HeadersTest(DateTime value, [FromCap]CapHeader header)
+{
+    var offset = header["my.kafka.offset"];
+    var partition = header["my.kafka.partition"];
+}
+```
+

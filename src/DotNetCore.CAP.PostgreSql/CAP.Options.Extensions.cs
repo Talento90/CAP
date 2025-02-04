@@ -6,45 +6,46 @@ using DotNetCore.CAP;
 using Microsoft.EntityFrameworkCore;
 
 // ReSharper disable once CheckNamespace
-namespace Microsoft.Extensions.DependencyInjection
+namespace Microsoft.Extensions.DependencyInjection;
+
+public static class CapOptionsExtensions
 {
-    public static class CapOptionsExtensions
+    public static CapOptions UsePostgreSql(this CapOptions options, string connectionString)
     {
-        public static CapOptions UsePostgreSql(this CapOptions options, string connectionString)
+#pragma warning disable CS0618 // Type or member is obsolete
+        return options.UsePostgreSql(opt => { opt.ConnectionString = connectionString; });
+#pragma warning restore CS0618 // Type or member is obsolete
+    }
+
+    public static CapOptions UsePostgreSql(this CapOptions options, Action<PostgreSqlOptions> configure)
+    {
+        if (configure == null) throw new ArgumentNullException(nameof(configure));
+
+        configure += x => x.Version = options.Version;
+
+        options.RegisterExtension(new PostgreSqlCapOptionsExtension(configure));
+
+        return options;
+    }
+
+    public static CapOptions UseEntityFramework<TContext>(this CapOptions options)
+        where TContext : DbContext
+    {
+        return options.UseEntityFramework<TContext>(opt => { });
+    }
+
+    public static CapOptions UseEntityFramework<TContext>(this CapOptions options, Action<EFOptions> configure)
+        where TContext : DbContext
+    {
+        if (configure == null) throw new ArgumentNullException(nameof(configure));
+
+        options.RegisterExtension(new PostgreSqlCapOptionsExtension(x =>
         {
-            return options.UsePostgreSql(opt => { opt.ConnectionString = connectionString; });
-        }
+            configure(x);
+            x.Version = options.Version;
+            x.DbContextType = typeof(TContext);
+        }));
 
-        public static CapOptions UsePostgreSql(this CapOptions options, Action<PostgreSqlOptions> configure)
-        {
-            if (configure == null) throw new ArgumentNullException(nameof(configure));
-
-            configure += x => x.Version = options.Version;
-
-            options.RegisterExtension(new PostgreSqlCapOptionsExtension(configure));
-
-            return options;
-        }
-
-        public static CapOptions UseEntityFramework<TContext>(this CapOptions options)
-            where TContext : DbContext
-        {
-            return options.UseEntityFramework<TContext>(opt => { });
-        }
-
-        public static CapOptions UseEntityFramework<TContext>(this CapOptions options, Action<EFOptions> configure)
-            where TContext : DbContext
-        {
-            if (configure == null) throw new ArgumentNullException(nameof(configure));
-
-            options.RegisterExtension(new PostgreSqlCapOptionsExtension(x =>
-            {
-                configure(x);
-                x.Version = options.Version;
-                x.DbContextType = typeof(TContext);
-            }));
-
-            return options;
-        }
+        return options;
     }
 }

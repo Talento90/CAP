@@ -5,31 +5,36 @@ using System;
 using DotNetCore.CAP.Transport;
 using Microsoft.Extensions.Options;
 
-namespace DotNetCore.CAP.RabbitMQ
+namespace DotNetCore.CAP.RabbitMQ;
+
+internal sealed class RabbitMqConsumerClientFactory : IConsumerClientFactory
 {
-    internal sealed class RabbitMQConsumerClientFactory : IConsumerClientFactory
+    private readonly IConnectionChannelPool _connectionChannelPool;
+    private readonly IOptions<RabbitMQOptions> _rabbitMqOptions;
+    private readonly IServiceProvider _serviceProvider;
+
+    public RabbitMqConsumerClientFactory(IOptions<RabbitMQOptions> rabbitMqOptions, IConnectionChannelPool channelPool,
+        IServiceProvider serviceProvider)
     {
-        private readonly IConnectionChannelPool _connectionChannelPool;
-        private readonly IOptions<RabbitMQOptions> _rabbitMQOptions;
+        _rabbitMqOptions = rabbitMqOptions;
+        _connectionChannelPool = channelPool;
+        _serviceProvider = serviceProvider;
+    }
 
-        public RabbitMQConsumerClientFactory(IOptions<RabbitMQOptions> rabbitMQOptions, IConnectionChannelPool channelPool)
+    public IConsumerClient Create(string groupId, byte concurrent)
+    {
+        try
         {
-            _rabbitMQOptions = rabbitMQOptions;
-            _connectionChannelPool = channelPool;
+            var client = new RabbitMqConsumerClient(groupId, concurrent, _connectionChannelPool,
+                _rabbitMqOptions, _serviceProvider);
+            
+            client.Connect().GetAwaiter().GetResult();
+            
+            return client;
         }
-
-        public IConsumerClient Create(string groupId)
+        catch (Exception e)
         {
-            try
-            {
-               var client = new RabbitMQConsumerClient(groupId, _connectionChannelPool, _rabbitMQOptions);
-               client.Connect();
-               return client;
-            }
-            catch (Exception e)
-            {
-                throw new BrokerConnectionException(e);
-            }
+            throw new BrokerConnectionException(e);
         }
     }
 }

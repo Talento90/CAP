@@ -34,7 +34,7 @@ internal class ConsumerRegister : IConsumerRegister
     private IConsumerClientFactory _consumerClientFactory = default!;
     private CancellationTokenSource _cts = new();
     private IDispatcher _dispatcher = default!;
-    private bool _disposed;
+    private int _disposed;
     private bool _isHealthy = true;
 
     private MethodMatcherCache _selector = default!;
@@ -67,7 +67,7 @@ internal class ConsumerRegister : IConsumerRegister
 
         Execute();
 
-        _disposed = false;
+        _disposed = 0;
 
         return Task.CompletedTask;
     }
@@ -87,9 +87,8 @@ internal class ConsumerRegister : IConsumerRegister
 
     public void Dispose()
     {
-        if (_disposed) return;
-
-        _disposed = true;
+        if (Interlocked.CompareExchange(ref _disposed, 1, 0) == 1)
+            return;
 
         try
         {
@@ -117,9 +116,11 @@ internal class ConsumerRegister : IConsumerRegister
         foreach (var matchGroup in groupingMatches)
         {
             ICollection<string> topics;
+            var limit = _selector.GetGroupConcurrentLimit(matchGroup.Key);
             try
             {
-                using (var client = _consumerClientFactory.Create(matchGroup.Key))
+                // ReSharper disable once ConvertToUsingDeclaration
+                using (var client = _consumerClientFactory.Create(matchGroup.Key, limit))
                 {
                     client.OnLogCallback = WriteLog;
                     topics = client.FetchTopics(matchGroup.Value.Select(x => x.TopicName));
@@ -139,14 +140,15 @@ internal class ConsumerRegister : IConsumerRegister
                   {
                       try
                       {
-                          using (var client = _consumerClientFactory.Create(matchGroup.Key))
+                          // ReSharper disable once ConvertToUsingDeclaration
+                          using (var client = _consumerClientFactory.Create(matchGroup.Key, limit))
                           {
                               _serverAddress = client.BrokerAddress;
 
                               RegisterMessageProcessor(client);
 
                               client.Subscribe(topicIds);
-                               
+
                               client.Listening(_pollingDelay, _cts.Token);
                           }
                       }
@@ -173,7 +175,7 @@ internal class ConsumerRegister : IConsumerRegister
     private void RegisterMessageProcessor(IConsumerClient client)
     {
         client.OnLogCallback = WriteLog;
-        client.OnMessageCallback = async (transportMessage,sender) =>
+        client.OnMessageCallback = async (transportMessage, sender) =>
         {
             long? tracingTimestamp = null;
             try
@@ -231,7 +233,7 @@ internal class ConsumerRegister : IConsumerRegister
                 {
                     var content = _serializer.Serialize(message);
 
-                    await _storage.StoreReceivedExceptionMessageAsync(name, group, content); 
+                    await _storage.StoreReceivedExceptionMessageAsync(name, group, content);
 
                     client.Commit(sender);
 
@@ -258,11 +260,12 @@ internal class ConsumerRegister : IConsumerRegister
                     var mediumMessage = await _storage.StoreReceivedMessageAsync(name, group, message);
                     mediumMessage.Origin = message;
 
-                    client.Commit(sender);
-
                     TracingAfter(tracingTimestamp, transportMessage, _serverAddress);
 
                     await _dispatcher.EnqueueToExecute(mediumMessage, executor!);
+
+                    client.Commit(sender);
+
                 }
             }
             catch (Exception e)
@@ -274,7 +277,7 @@ internal class ConsumerRegister : IConsumerRegister
 
                 TracingError(tracingTimestamp, transportMessage, client.BrokerAddress, e);
             }
-        };       
+        };
     }
 
     private void WriteLog(LogMessageEventArgs logmsg)
@@ -282,6 +285,7 @@ internal class ConsumerRegister : IConsumerRegister
         switch (logmsg.LogType)
         {
             case MqLogType.ConsumerCancelled:
+                _isHealthy = false;
                 _logger.LogWarning("RabbitMQ consumer cancelled. --> " + logmsg.Reason);
                 break;
             case MqLogType.ConsumerRegistered:
@@ -323,6 +327,10 @@ internal class ConsumerRegister : IConsumerRegister
                 _logger.LogError(
                     "AmazonSQS subscriber change message's visibility failed, message isn't in flight. --> " +
                     logmsg.Reason);
+                break;
+            case MqLogType.RedisConsumeError:
+                _isHealthy = true;
+                _logger.LogError("Redis client consume error. --> {reason}", logmsg.Reason);
                 break;
             default:
                 throw new ArgumentOutOfRangeException();

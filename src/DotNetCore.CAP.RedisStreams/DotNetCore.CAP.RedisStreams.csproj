@@ -1,9 +1,10 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
-		<TargetFramework>net6.0</TargetFramework>
+		<TargetFrameworks>net6.0;net8.0</TargetFrameworks>
 		<Nullable>enable</Nullable>
 		<PackageTags>$(PackageTags);RedisStreams</PackageTags>
+		<LangVersion>preview</LangVersion>
 	</PropertyGroup>
 
 	<PropertyGroup>
@@ -12,11 +13,12 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<PackageReference Include="StackExchange.Redis" Version="2.6.70" />
+		<PackageReference Include="StackExchange.Redis" Version="2.8.16" />
 	</ItemGroup>
 
 	<ItemGroup>
 		<ProjectReference Include="..\DotNetCore.CAP\DotNetCore.CAP.csproj" />
+		<InternalsVisibleTo Include="DotNetCore.CAP.RedisStreams.Test"/>
 	</ItemGroup>
 
 </Project>

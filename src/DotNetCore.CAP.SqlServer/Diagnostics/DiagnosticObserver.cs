@@ -6,8 +6,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
-using DotNetCore.CAP.Persistence;
-using DotNetCore.CAP.Transport;
+using DotNetCore.CAP.Internal;
 using Microsoft.Data.SqlClient;
 
 namespace DotNetCore.CAP.SqlServer.Diagnostics;
@@ -19,14 +18,11 @@ internal class DiagnosticObserver : IObserver<KeyValuePair<string, object?>>
     public const string SqlAfterRollbackTransactionMicrosoft = "Microsoft.Data.SqlClient.WriteTransactionRollbackAfter";
     public const string SqlBeforeCloseConnectionMicrosoft = "Microsoft.Data.SqlClient.WriteConnectionCloseBefore";
 
-    private readonly ConcurrentDictionary<Guid, List<MediumMessage>> _bufferList;
-    private readonly IDispatcher _dispatcher;
+    private readonly ConcurrentDictionary<Guid, SqlServerCapTransaction> _transBuffer;
 
-    public DiagnosticObserver(IDispatcher dispatcher,
-        ConcurrentDictionary<Guid, List<MediumMessage>> bufferList)
+    public DiagnosticObserver(ConcurrentDictionary<Guid, SqlServerCapTransaction> bufferTrans)
     {
-        _dispatcher = dispatcher;
-        _bufferList = bufferList;
+        _transBuffer = bufferTrans;
     }
 
     public void OnCompleted()
@@ -42,28 +38,41 @@ internal class DiagnosticObserver : IObserver<KeyValuePair<string, object?>>
         switch (evt.Key)
         {
             case SqlAfterCommitTransactionMicrosoft:
-            {
-                if (!TryGetSqlConnection(evt, out var sqlConnection)) return;
-                var transactionKey = sqlConnection.ClientConnectionId;
-                if (_bufferList.TryRemove(transactionKey, out var msgList))
-                    foreach (var message in msgList)
-                        _dispatcher.EnqueueToPublish(message);
-
-                break;
-            }
-            case SqlErrorCommitTransactionMicrosoft or SqlAfterRollbackTransactionMicrosoft
-                or SqlBeforeCloseConnectionMicrosoft:
-            {
-                if (!_bufferList.IsEmpty)
                 {
                     if (!TryGetSqlConnection(evt, out var sqlConnection)) return;
                     var transactionKey = sqlConnection.ClientConnectionId;
 
-                    _bufferList.TryRemove(transactionKey, out _);
-                }
+                    if (_transBuffer.TryRemove(transactionKey, out var transaction))
+                    {
+                        if (GetProperty(evt.Value, "Operation") as string == "Rollback")
+                        {
+                            transaction.Dispose();
+                            return;
+                        }
 
-                break;
-            }
+                        transaction.DbTransaction = new NoopTransaction();
+                        transaction.Commit();
+                        transaction.Dispose();
+                    }
+
+                    break;
+                }
+            case SqlErrorCommitTransactionMicrosoft or SqlAfterRollbackTransactionMicrosoft
+                or SqlBeforeCloseConnectionMicrosoft:
+                {
+                    if (!_transBuffer.IsEmpty)
+                    {
+                        if (!TryGetSqlConnection(evt, out var sqlConnection)) return;
+                        var transactionKey = sqlConnection.ClientConnectionId;
+
+                        if (_transBuffer.TryRemove(transactionKey, out var transaction))
+                        {
+                            transaction.Dispose();
+                        }
+                    }
+
+                    break;
+                }
         }
     }
 

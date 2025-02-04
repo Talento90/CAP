@@ -13,16 +13,15 @@ namespace DotNetCore.CAP.MySql;
 
 public class MySqlStorageInitializer : IStorageInitializer
 {
+    private readonly IOptions<CapOptions> _capOptions;
     private readonly ILogger _logger;
     private readonly IOptions<MySqlOptions> _options;
 
     private ServerVersion? _serverVersion;
 
-    private readonly IOptions<CapOptions> _capOptions;
-
     public MySqlStorageInitializer(
         ILogger<MySqlStorageInitializer> logger,
-        IOptions<MySqlOptions> options, 
+        IOptions<MySqlOptions> options,
         IOptions<CapOptions> capOptions)
     {
         _options = options;
@@ -45,21 +44,6 @@ public class MySqlStorageInitializer : IStorageInitializer
         return $"{_options.Value.TableNamePrefix}.lock";
     }
 
-    public virtual bool IsSupportSkipLocked()
-    {
-        if (_serverVersion == null) return false;
-
-        switch (_serverVersion.Type)
-        {
-            case ServerVersion.ServerType.MySql when _serverVersion.Version.Major >= 8:
-            case ServerVersion.ServerType.MariaDb when _serverVersion.Version.Major > 10:
-            case ServerVersion.ServerType.MariaDb when _serverVersion.Version.Major == 10 && _serverVersion.Version.Minor >= 6:
-                return true;
-            default:
-                return false;
-        }
-    }
-
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
         if (cancellationToken.IsCancellationRequested) return;
@@ -74,12 +58,28 @@ public class MySqlStorageInitializer : IStorageInitializer
             {
                 new MySqlParameter("@PubKey", $"publish_retry_{_capOptions.Value.Version}"),
                 new MySqlParameter("@RecKey", $"received_retry_{_capOptions.Value.Version}"),
-                new MySqlParameter("@LastLockTime", DateTime.MinValue),
+                new MySqlParameter("@LastLockTime", DateTime.MinValue)
             };
             await connection.ExecuteNonQueryAsync(sql, sqlParams: sqlParams).ConfigureAwait(false);
         }
 
         _logger.LogDebug("Ensuring all create database tables script are applied.");
+    }
+
+    public virtual bool IsSupportSkipLocked()
+    {
+        if (_serverVersion == null) return false;
+
+        switch (_serverVersion.Type)
+        {
+            case ServerVersion.ServerType.MySql when _serverVersion.Version.Major >= 8:
+            case ServerVersion.ServerType.MariaDb when _serverVersion.Version.Major > 10:
+            case ServerVersion.ServerType.MariaDb
+                when _serverVersion.Version.Major == 10 && _serverVersion.Version.Minor >= 6:
+                return true;
+            default:
+                return false;
+        }
     }
 
 
@@ -98,7 +98,8 @@ CREATE TABLE IF NOT EXISTS `{GetReceivedTableName()}` (
   `ExpiresAt` datetime DEFAULT NULL,
   `StatusName` varchar(50) NOT NULL,
   PRIMARY KEY (`Id`),
-  INDEX `IX_ExpiresAt`(`ExpiresAt`)
+  INDEX `IX_Version_ExpiresAt_StatusName` (`Version`, `ExpiresAt`, `StatusName`),
+  INDEX `IX_ExpiresAt_StatusName` (`ExpiresAt`, `StatusName`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS `{GetPublishedTableName()}` (
@@ -111,9 +112,9 @@ CREATE TABLE IF NOT EXISTS `{GetPublishedTableName()}` (
   `ExpiresAt` datetime DEFAULT NULL,
   `StatusName` varchar(40) NOT NULL,
   PRIMARY KEY (`Id`),
-  INDEX `IX_ExpiresAt`(`ExpiresAt`)
+  INDEX `IX_Version_ExpiresAt_StatusName` (`Version`, `ExpiresAt`, `StatusName`),
+  INDEX `IX_ExpiresAt_StatusName` (`ExpiresAt`, `StatusName`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
 ";
         if (_capOptions.Value.UseStorageLock)
             batchSql += $@"

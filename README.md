@@ -1,9 +1,9 @@
 <p align="center">
-  <img height="140" src="https://cap.dotnetcore.xyz/img/logo.svg">
+  <img height="140" src="https://raw.githubusercontent.com/dotnetcore/CAP/master/docs/content/img/logo.svg">
 </p>
 
 # CAP 　　　　　　　　　　　　　　　　　　　　[中文](https://github.com/dotnetcore/CAP/blob/master/README.zh-cn.md)
-[![Travis branch](https://img.shields.io/travis/dotnetcore/CAP/master.svg?label=travis-ci)](https://travis-ci.org/dotnetcore/CAP)
+[![Docs&Dashboard](https://github.com/dotnetcore/CAP/actions/workflows/deploy-docs-and-dashboard.yml/badge.svg?branch=master)](https://github.com/dotnetcore/CAP/actions/workflows/deploy-docs-and-dashboard.yml)
 [![AppVeyor](https://ci.appveyor.com/api/projects/status/v8gfh6pe2u2laqoa/branch/master?svg=true)](https://ci.appveyor.com/project/yang-xiaodong/cap/branch/master)
 [![NuGet](https://img.shields.io/nuget/v/DotNetCore.CAP.svg)](https://www.nuget.org/packages/DotNetCore.CAP/)
 [![NuGet Preview](https://img.shields.io/nuget/vpre/DotNetCore.CAP.svg?label=nuget-pre)](https://www.nuget.org/packages/DotNetCore.CAP/)
@@ -18,7 +18,7 @@ You can also use CAP as an EventBus. CAP provides a simpler way to implement eve
 
 ## Architecture overview
 
-![cap.png](https://cap.dotnetcore.xyz/img/architecture-new.png)
+![cap.png](https://raw.githubusercontent.com/dotnetcore/CAP/master/docs/content/img/architecture-new.png)
 
 > CAP implements the Outbox Pattern described in the [eShop ebook](https://docs.microsoft.com/en-us/dotnet/standard/microservices-architecture/multi-container-microservice-net-applications/subscribe-events#designing-atomicity-and-resiliency-when-publishing-to-the-event-bus).
 
@@ -247,8 +247,7 @@ public void ShowTime2(DateTime datetime)
 }
 
 ```
-`ShowTime1` and `ShowTime2` will be called one after another because all received messages are processed linear.
-You can change that behaviour to set `UseDispatchingPerGroup` true.
+`ShowTime1` and `ShowTime2` will be called at the same time.
 
 BTW, You can specify the default group name in the configuration:
 
@@ -270,28 +269,17 @@ PM> Install-Package DotNetCore.CAP.Dashboard
 
 In the distributed environment, the dashboard built-in integrates [Consul](http://consul.io) as a node discovery, while the realization of the gateway agent function, you can also easily view the node or other node data, It's like you are visiting local resources.
 
-```c#
-services.AddCap(x =>
-{
-    //...
+[View Consul config docs](https://cap.dotnetcore.xyz/user-guide/en/monitoring/consul)
 
-    // Register Dashboard
-    x.UseDashboard();
+If your service is deployed in Kubernetes, please use our Kubernetes discovery package.
 
-    // Register to Consul
-    x.UseDiscovery(d =>
-    {
-        d.DiscoveryServerHostName = "localhost";
-        d.DiscoveryServerPort = 8500;
-        d.CurrentNodeHostName = "localhost";
-        d.CurrentNodePort = 5800;
-        d.NodeId = 1;
-        d.NodeName = "CAP No.1 Node";
-    });
-});
+```
+PM> Install-Package DotNetCore.CAP.Dashboard.K8s
 ```
 
-The default dashboard address is :[http://localhost:xxx/cap](http://localhost:xxx/cap), you can configure relative path `/cap` with `x.UseDashboard(opt =>{ opt.MatchPath="/mycap"; })`.
+[View Kubernetes config docs](https://cap.dotnetcore.xyz/user-guide/en/monitoring/kubernetes/)
+
+The dashboard default address is: [http://localhost:xxx/cap](http://localhost:xxx/cap) , you can configure relative path `/cap` with `x.UseDashboard(opt =>{ opt.MatchPath="/mycap"; })`.
 
 
 ## Contribute

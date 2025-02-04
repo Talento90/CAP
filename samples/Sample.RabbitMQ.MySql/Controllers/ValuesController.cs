@@ -20,7 +20,7 @@ namespace Sample.RabbitMQ.MySql.Controllers
         }
 
         [Route("~/control/start")]
-        public async Task<IActionResult> Start([FromServices]IBootstrapper bootstrapper)
+        public async Task<IActionResult> Start([FromServices] IBootstrapper bootstrapper)
         {
             await bootstrapper.BootstrapAsync();
             return Ok();
@@ -34,9 +34,9 @@ namespace Sample.RabbitMQ.MySql.Controllers
         }
 
         [Route("~/without/transaction")]
-        public async Task<IActionResult> WithoutTransaction()
+        public async Task<IActionResult> WithoutTransactionAsync()
         {
-            await _capBus.PublishAsync("sample.rabbitmq.test", DateTime.Now);
+            await _capBus.PublishAsync("sample.rabbitmq.mysql", DateTime.Now, cancellationToken: HttpContext.RequestAborted);
 
             return Ok();
         }
@@ -50,45 +50,36 @@ namespace Sample.RabbitMQ.MySql.Controllers
         }
 
         [Route("~/adonet/transaction")]
-        public IActionResult AdonetWithTransaction()
+        public async Task<IActionResult> AdonetWithTransaction()
         {
-            using (var connection = new MySqlConnection(AppDbContext.ConnectionString))
+            using (var connection = new MySqlConnection(Startup.ConnectionString))
             {
-                using (var transaction = connection.BeginTransaction(_capBus, true))
-                {
-                    connection.Execute("insert into test(name) values('test')", transaction: (IDbTransaction)transaction.DbTransaction);
-
-                    _capBus.Publish("sample.rabbitmq.mysql", DateTime.Now);
-                }
+                using var transaction = await connection.BeginTransactionAsync(_capBus, true);
+                await connection.ExecuteAsync("insert into test(name) values('test')", transaction: (IDbTransaction)transaction.DbTransaction);
+                await _capBus.PublishAsync("sample.rabbitmq.mysql", DateTime.Now);
             }
 
             return Ok();
         }
 
-        [Route("~/ef/transaction")]
-        public IActionResult EntityFrameworkWithTransaction([FromServices] AppDbContext dbContext)
-        {
-            using (var trans = dbContext.Database.BeginTransaction(_capBus, autoCommit: false))
-            {
-                dbContext.Persons.Add(new Person() { Name = "ef.transaction" });
-
-                for (int i = 0; i < 1; i++)
-                {
-                    _capBus.Publish("sample.rabbitmq.mysql", DateTime.Now);
-                }
-
-                dbContext.SaveChanges();
-
-                trans.Commit();
-            }
-            return Ok();
-        }
+        //[Route("~/ef/transaction")]
+        //public async Task<IActionResult> EntityFrameworkWithTransaction([FromServices] AppDbContext dbContext)
+        //{
+        //    using (var trans = await dbContext.Database.BeginTransactionAsync(_capBus, autoCommit: false))
+        //    {
+        //        await dbContext.Persons.AddAsync(new Person() { Name = "ef.transaction" });
+        //        await _capBus.PublishAsync("sample.rabbitmq.mysql", DateTime.Now);
+        //        await dbContext.SaveChangesAsync();
+        //        await trans.CommitAsync();
+        //    }
+        //    return Ok();
+        //}
 
         [NonAction]
-        [CapSubscribe("sample.rabbitmq.test")]
-        public void Subscriber(string content)
+        [CapSubscribe("sample.rabbitmq.mysql")]
+        public void Subscriber(DateTime time)
         {
-            Console.WriteLine($"Consume time: {DateTime.Now} \r\n   --> " +content);
+            Console.WriteLine("Publishing time:" + time);
         }
     }
 }

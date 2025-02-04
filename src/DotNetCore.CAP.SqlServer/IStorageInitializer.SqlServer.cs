@@ -14,9 +14,9 @@ namespace DotNetCore.CAP.SqlServer;
 
 public class SqlServerStorageInitializer : IStorageInitializer
 {
+    private readonly IOptions<CapOptions> _capOptions;
     private readonly ILogger _logger;
     private readonly IOptions<SqlServerOptions> _options;
-    private readonly IOptions<CapOptions> _capOptions;
 
     public SqlServerStorageInitializer(
         ILogger<SqlServerStorageInitializer> logger,
@@ -53,7 +53,7 @@ public class SqlServerStorageInitializer : IStorageInitializer
         {
             new SqlParameter("@PubKey", $"publish_retry_{_capOptions.Value.Version}"),
             new SqlParameter("@RecKey", $"received_retry_{_capOptions.Value.Version}"),
-            new SqlParameter("@LastLockTime", DateTime.MinValue){ SqlDbType = SqlDbType.DateTime2 },
+            new SqlParameter("@LastLockTime", DateTime.MinValue) { SqlDbType = SqlDbType.DateTime2 }
         };
         await connection.ExecuteNonQueryAsync(sql, sqlParams: sqlParams).ConfigureAwait(false);
 
@@ -86,6 +86,12 @@ CREATE TABLE {GetReceivedTableName()}(
 	[Id] ASC
 )WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON) ON [PRIMARY]
 ) ON [PRIMARY] TEXTIMAGE_ON [PRIMARY]
+
+CREATE NONCLUSTERED INDEX [IX_{GetReceivedTableName()}_Version_ExpiresAt_StatusName] ON {GetReceivedTableName()} ([Version] ASC,[ExpiresAt] ASC,[StatusName] ASC) 
+INCLUDE ([Id], [Content], [Retries], [Added])
+
+CREATE NONCLUSTERED INDEX [IX_{GetReceivedTableName()}_ExpiresAt_StatusName] ON {GetReceivedTableName()} ([ExpiresAt] ASC,[StatusName] ASC)
+
 END;
 
 IF OBJECT_ID(N'{GetPublishedTableName()}',N'U') IS NULL
@@ -104,6 +110,12 @@ CREATE TABLE {GetPublishedTableName()}(
 	[Id] ASC
 )WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON) ON [PRIMARY]
 ) ON [PRIMARY] TEXTIMAGE_ON [PRIMARY]
+
+CREATE NONCLUSTERED INDEX [IX_{GetPublishedTableName()}_Version_ExpiresAt_StatusName] ON {GetPublishedTableName()} ([Version] ASC,[ExpiresAt] ASC,[StatusName] ASC) 
+INCLUDE ([Id], [Content], [Retries], [Added])
+
+CREATE NONCLUSTERED INDEX [IX_{GetPublishedTableName()}_ExpiresAt_StatusName] ON {GetPublishedTableName()} ([ExpiresAt] ASC,[StatusName] ASC)
+
 END;
 ";
         if (_capOptions.Value.UseStorageLock)

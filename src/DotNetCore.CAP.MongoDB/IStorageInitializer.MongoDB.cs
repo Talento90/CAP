@@ -3,7 +3,6 @@
 
 using System;
 using System.Linq;
-using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using DotNetCore.CAP.Persistence;
@@ -15,15 +14,15 @@ namespace DotNetCore.CAP.MongoDB;
 
 public class MongoDBStorageInitializer : IStorageInitializer
 {
+    private readonly IOptions<CapOptions> _capOptions;
     private readonly IMongoClient _client;
     private readonly ILogger _logger;
     private readonly IOptions<MongoDBOptions> _options;
-    private readonly IOptions<CapOptions> _capOptions;
 
     public MongoDBStorageInitializer(
         ILogger<MongoDBStorageInitializer> logger,
         IMongoClient client,
-        IOptions<MongoDBOptions> options,IOptions<CapOptions> capOptions)
+        IOptions<MongoDBOptions> options, IOptions<CapOptions> capOptions)
     {
         _capOptions = capOptions;
         _options = options;
@@ -64,56 +63,66 @@ public class MongoDBStorageInitializer : IStorageInitializer
             await database.CreateCollectionAsync(options.PublishedCollection, cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
 
-        if (_capOptions.Value.UseStorageLock&&names.All(n => n != options.LockCollection))
+        if (_capOptions.Value.UseStorageLock && names.All(n => n != options.LockCollection))
             await database.CreateCollectionAsync(options.LockCollection, cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
-        
+
         await Task.WhenAll(
-            TryCreateIndexesAsync<ReceivedMessage>(options.ReceivedCollection),
-            TryCreateIndexesAsync<PublishedMessage>(options.PublishedCollection)).ConfigureAwait(false);
-        
+            CreateReceivedMessageIndexesAsync(),
+            CreatePublishedMessageIndexesAsync()).ConfigureAwait(false);
+
         if (_capOptions.Value.UseStorageLock)
         {
             await database.GetCollection<Lock>(options.LockCollection)
-                .UpdateOneAsync(it=>it.Key==$"publish_retry_{_capOptions.Value.Version}",
-                    Builders<Lock>.Update.Set(model=>model.Key,$"publish_retry_{_capOptions.Value.Version}").SetOnInsert(model=>model.LastLockTime,DateTime.MinValue), 
-                    new UpdateOptions() { IsUpsert = true },cancellationToken);
-            
+                .UpdateOneAsync(it => it.Key == $"publish_retry_{_capOptions.Value.Version}",
+                    Builders<Lock>.Update.Set(model => model.Key, $"publish_retry_{_capOptions.Value.Version}")
+                        .SetOnInsert(model => model.LastLockTime, DateTime.MinValue),
+                    new UpdateOptions { IsUpsert = true }, cancellationToken);
+
             await database.GetCollection<Lock>(options.LockCollection)
-                .UpdateOneAsync(it=>it.Key==$"received_retry_{_capOptions.Value.Version}",
-                    Builders<Lock>.Update.Set(model=>model.Key,$"received_retry_{_capOptions.Value.Version}").SetOnInsert(model=>model.LastLockTime,DateTime.MinValue), 
-                    new UpdateOptions() { IsUpsert = true },cancellationToken);
+                .UpdateOneAsync(it => it.Key == $"received_retry_{_capOptions.Value.Version}",
+                    Builders<Lock>.Update.Set(model => model.Key, $"received_retry_{_capOptions.Value.Version}")
+                        .SetOnInsert(model => model.LastLockTime, DateTime.MinValue),
+                    new UpdateOptions { IsUpsert = true }, cancellationToken);
         }
-       
+
         _logger.LogDebug("Ensuring all create database tables script are applied.");
 
-
-        async Task TryCreateIndexesAsync<T>(string collectionName)
+        async Task CreateReceivedMessageIndexesAsync()
         {
-            var indexNames = new[] { "Name", "Added", "ExpiresAt", "StatusName", "Retries", "Version" };
-            var col = database.GetCollection<T>(collectionName);
-            using (var cursor = await col.Indexes.ListAsync(cancellationToken).ConfigureAwait(false))
+            IndexKeysDefinitionBuilder<ReceivedMessage> builder = Builders<ReceivedMessage>.IndexKeys;
+            var col = database.GetCollection<ReceivedMessage>(options.ReceivedCollection);
+
+            CreateIndexModel<ReceivedMessage>[] indexes =
             {
-                var existingIndexes = await cursor.ToListAsync(cancellationToken).ConfigureAwait(false);
-                var existingIndexNames = existingIndexes.Select(o => o["name"].AsString).ToArray();
-                indexNames = indexNames.Except(existingIndexNames).ToArray();
-            }
+                new(builder.Ascending(x => x.Name)),
+                new(builder.Ascending(x => x.Added)),
+                new(builder.Ascending(x => x.ExpiresAt)),
+                new(builder.Ascending(x => x.StatusName)),
+                new(builder.Ascending(x => x.Retries)),
+                new(builder.Ascending(x => x.Version))
+            };
 
-            if (indexNames.Any() == false)
-                return;
+            await col.Indexes.CreateManyAsync(indexes, cancellationToken);
+        }
 
-            var indexes = indexNames.Select(indexName =>
+        async Task CreatePublishedMessageIndexesAsync()
+        {
+            IndexKeysDefinitionBuilder<PublishedMessage> builder = Builders<PublishedMessage>.IndexKeys;
+            var col = database.GetCollection<PublishedMessage>(options.PublishedCollection);
+
+            CreateIndexModel<PublishedMessage>[] indexes =
             {
-                var indexOptions = new CreateIndexOptions
-                {
-                    Name = indexName,
-                    Background = true
-                };
-                var indexBuilder = Builders<T>.IndexKeys;
-                return new CreateIndexModel<T>(indexBuilder.Descending(indexName), indexOptions);
-            }).ToArray();
+                new(builder.Ascending(x => x.Name)),
+                new(builder.Ascending(x => x.Added)),
+                new(builder.Ascending(x => x.ExpiresAt)),
+                new(builder.Ascending(x => x.StatusName)),
+                new(builder.Ascending(x => x.Retries)),
+                new(builder.Ascending(x => x.Version)),
+                new(builder.Ascending(x => x.StatusName).Ascending(x => x.ExpiresAt))
+            };
 
-            await col.Indexes.CreateManyAsync(indexes, cancellationToken).ConfigureAwait(false);
+            await col.Indexes.CreateManyAsync(indexes, cancellationToken);
         }
     }
 }

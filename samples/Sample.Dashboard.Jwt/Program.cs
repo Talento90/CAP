@@ -14,7 +14,7 @@ builder.Logging.AddConsole();
 // Add services to the container.
 builder.Services.AddRazorPages();
 
-var key = Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]);
+var key = Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]!);
 builder.Services.AddAuthentication(options =>
     {
         options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
@@ -49,21 +49,7 @@ builder.Services.AddAuthentication(options =>
     });
 builder.Services.AddAuthorization();
 
-builder.Services.AddCap(cap =>
-{
-    cap.UseDashboard(d =>
-    {
-        d.UseAuth = true;
-        d.DefaultAuthenticationScheme = JwtBearerDefaults.AuthenticationScheme;
-    });
-    cap.UseMySql("server=192.168.3.57;port=3307;database=cap;UserId=root;Password=123123;");
-    cap.UseRabbitMQ(aa =>
-    {
-        aa.HostName = "192.168.3.57";
-        aa.UserName = "user";
-        aa.Password = "wJ0p5gSs17";
-    });
-});
+builder.Services.AddCapDashboardStandalone();
 
 var app = builder.Build();
 
@@ -72,10 +58,10 @@ app.UseStaticFiles();
 
 app.UseRouting();
 
-app.MapGet("/",  () => Results.LocalRedirect("/index.html", true));
+app.MapGet("/", () => Results.LocalRedirect("/index.html", true));
 
 app.MapPost("/security/createToken",
-    [AllowAnonymous](User user) =>
+    [AllowAnonymous] (User user) =>
     {
         if (user is { UserName: "bob", Password: "bob" })
         {
